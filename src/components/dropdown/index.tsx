@@ -1,9 +1,13 @@
 import {
   Dispatch,
+  KeyboardEvent,
   PropsWithChildren,
   SetStateAction,
   createContext,
+  forwardRef,
   useContext,
+  useEffect,
+  useRef,
   useState,
 } from "react";
 
@@ -24,8 +28,9 @@ type DropdownContextValues = {
 type DropdownDispatchContextValues = {
   setItems: Dispatch<SetStateAction<DropdownItemType[]>>;
   toggle: (force?: boolean) => void;
-  selectIndex: (index: number) => void; // item을 선택하는 함수
-  focusIndex: (index: number) => void;
+  selectIndex: Dispatch<SetStateAction<number>>; // item을 선택하는 함수
+  focusIndex: Dispatch<SetStateAction<number>>;
+  handleKeyDown: (e: KeyboardEvent) => void;
 };
 
 const DropdownContext = createContext<DropdownContextValues | null>(null);
@@ -48,6 +53,34 @@ const useSetDropdown = () => {
   return context;
 };
 
+/** @description 키보드 이벤트 */
+type KeyEventHandler = (
+  e: KeyboardEvent,
+  values: Pick<
+    DropdownContextValues,
+    "focusedIndex" | "selectedIndex" | "items"
+  > &
+    Pick<DropdownDispatchContextValues, "focusIndex" | "selectIndex" | "toggle">
+) => void;
+// 강제로 지정해도 됨 ArrowUp | | |
+const KeyEventMap: Partial<Record<KeyboardEvent["key"], KeyEventHandler>> = {
+  ArrowUp: (e, { focusIndex, items }) => {
+    focusIndex((prev) => (items.length + prev - 1) % items.length);
+  },
+
+  ArrowDown: (e, { focusIndex, items }) => {
+    focusIndex((prev) => (items.length + prev + 1) % items.length);
+  },
+
+  Enter: (e, { selectIndex, focusedIndex }) => {
+    selectIndex(focusedIndex);
+  },
+
+  Escape: (e, { toggle }) => {
+    toggle(false);
+  },
+};
+
 const DropdownProvider = ({
   children,
   items: init,
@@ -62,6 +95,21 @@ const DropdownProvider = ({
     return setIsOpen((prev) => (typeof force === "boolean" ? force : !prev));
   };
 
+  const handleKeyDown = (e: KeyboardEvent) => {
+    const { key } = e;
+    const handler = KeyEventMap[key];
+
+    if (handler)
+      handler(e, {
+        selectIndex: setSelectedIndex,
+        focusIndex: setFocusedIndex,
+        focusedIndex,
+        selectedIndex,
+        toggle,
+        items,
+      });
+  };
+
   return (
     <DropdownContext.Provider
       value={{ items, isOpen, focusedIndex, selectedIndex }}
@@ -72,9 +120,10 @@ const DropdownProvider = ({
           focusIndex: setFocusedIndex,
           selectIndex: setSelectedIndex,
           setItems,
+          handleKeyDown,
         }}
       >
-        <div className={cn.Dropdown}>{children}</div>
+        {children}
       </DropdownDispatchContext.Provider>
     </DropdownContext.Provider>
   );
@@ -84,7 +133,17 @@ const Root = ({
   children,
   items,
 }: PropsWithChildren<Pick<DropdownContextValues, "items">>) => {
-  return <DropdownProvider items={items}>{children}</DropdownProvider>;
+  return (
+    <DropdownProvider items={items}>
+      <div className={cn.Dropdown}>{children}</div>
+    </DropdownProvider>
+  );
+};
+
+const Container = ({ children }: PropsWithChildren) => {
+  const { handleKeyDown } = useSetDropdown();
+
+  return <div onKeyDown={handleKeyDown}>{children}</div>;
 };
 
 const Trigger = () => {
@@ -100,34 +159,56 @@ const Trigger = () => {
   );
 };
 
-const Item = ({ item, index }: { item: DropdownItemType; index: number }) => {
-  const { focusedIndex, selectedIndex } = useDropdown();
+const Item = forwardRef<
+  HTMLLIElement,
+  { item: DropdownItemType; index: number }
+>(({ item, index }, ref) => {
+  const { selectedIndex, focusedIndex } = useDropdown();
   const { selectIndex } = useSetDropdown();
+
   return (
     <li
+      ref={ref}
       className={cn.item}
       role="option"
       aria-selected={selectedIndex === index}
-      aria-current={selectedIndex === index}
+      aria-current={focusedIndex === index}
     >
       <button onClick={() => selectIndex(index)}>
         <span>{item.text}</span>
       </button>
     </li>
   );
-};
+});
 
 const List = () => {
-  const { items, isOpen } = useDropdown();
+  const { items, isOpen, focusedIndex } = useDropdown();
+  const itemsRef = useRef<(HTMLLIElement | null)[]>([]);
+
+  useEffect(() => {
+    itemsRef.current[focusedIndex]?.scrollIntoView({
+      block: "nearest",
+    });
+  }, [focusedIndex]);
 
   if (!isOpen) return null;
+
   return (
     <ul className={cn.DropdownList}>
       {items.map((item, index) => {
-        return <Item key={item.id} item={item} index={index} />;
+        return (
+          <Item
+            key={item.id}
+            item={item}
+            index={index}
+            ref={(node) => {
+              itemsRef.current[index] = node;
+            }}
+          />
+        );
       })}
     </ul>
   );
 };
 
-export const Dropdown = Object.assign(Root, { Trigger, List, Item });
+export const Dropdown = Object.assign(Root, { Trigger, List, Item, Container });
